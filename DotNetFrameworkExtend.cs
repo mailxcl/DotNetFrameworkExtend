@@ -932,6 +932,12 @@ namespace System
             }
         }
 
+
+        public static string ToSQLStringPostgres(this DateTime dt)
+        {
+            return string.Format("to_date('{0}','yyyy-mm-dd hh24:mi:ss')", GetTimeStringFrom(dt));
+        }
+
         /// <summary>
         /// DateTime转为SQL(ORACLE)
         /// </summary>
@@ -1327,7 +1333,9 @@ namespace System.Data
             [Description("SqlServer数据库")]
             MSSQL = 3,
             [Description("Sqlite数据库")]
-            SQLITE = 4
+            SQLITE = 4,
+            [Description("Postgre数据库")]
+            POSTGRE = 5
         }
 
         [Serializable]
@@ -1466,6 +1474,39 @@ namespace System.Data
             }
         }
 
+        [Serializable]
+        [DisplayName("Postgre连接参数")]
+        public class PostgreConnectArgs : ConnectArgs
+        {
+            [Browsable(false)]
+            public override DataBaseType Type
+            {
+                get { return DataBaseType.POSTGRE; }
+            }
+
+            [Category("数据库"), DisplayName("服务器"), Description("数据库服务器地址")]
+            public string Server { get; set; }
+
+            [Category("数据库"), DisplayName("服务器"), Description("数据库名称")]
+            public string Port { get; set; }
+
+            [Category("验证"), DisplayName("数据库"), Description("数据库名称")]
+            public string DBName { get; set; }
+
+            [Category("验证"), DisplayName("用户名"), Description("数据库用户")]
+            public string User { get; set; }
+
+            [Category("验证"), DisplayName("密码"), Description("数据库用户密码"), PasswordPropertyText(true)]
+            public string Password { get; set; }
+
+            public override string ToString()
+            {
+                string format = "Server={0};Port={1};Database={2};User Id={3};Password={4};POOLING=False";
+                string result = string.Format(format, Server, Port, DBName, User, Password);
+                return result;
+            }
+        }
+
         /// <summary>
         /// 获取连接参数实例
         /// </summary>
@@ -1527,6 +1568,11 @@ namespace System.Data
                     result = DllPath.GetInstance("Oracle.DataAccess.Client.OracleConnection", true) as IDbConnection;
                     break;
 
+                case DataBaseType.POSTGRE:
+                    DllPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Npgsql.dll");
+                    result = DllPath.GetInstance("Npgsql.NpgsqlConnection", true) as IDbConnection;
+                    break;
+
                 case DataBaseType.MSSQL:
                     return new System.Data.SqlClient.SqlConnection(connectStr);
 
@@ -1557,6 +1603,10 @@ namespace System.Data
                     //return DllPath.GetInstance("Oracle.ManagedDataAccess.Client.OracleDataAdapter", true) as IDbDataAdapter;
                     DllPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Oracle.DataAccess.dll");
                     return DllPath.GetInstance("Oracle.DataAccess.Client.OracleDataAdapter", true) as IDbDataAdapter;
+
+                case DataBaseType.POSTGRE:
+                    DllPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Npgsql.dll");
+                    return DllPath.GetInstance("Npgsql.NpgsqlDataAdapter", true) as IDbDataAdapter;
 
                 case DataBaseType.MSSQL:
                     return new System.Data.SqlClient.SqlDataAdapter();
@@ -1595,6 +1645,11 @@ namespace System.Data
 
                     break;
 
+                case DataBaseType.POSTGRE:
+                    DllPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Npgsql.dll");
+                    result = DllPath.GetInstance("Npgsql.NpgsqlParameter", true) as IDataParameter;
+                    break;
+
                 case DataBaseType.MSSQL:
                     return new System.Data.SqlClient.SqlParameter(paramName, value);
 
@@ -1619,6 +1674,8 @@ namespace System.Data
             switch (type)
             {
                 case DataBaseType.ORACLE:
+                    return ':';
+                case DataBaseType.POSTGRE:
                     return ':';
 
                 case DataBaseType.SQLITE:
@@ -1825,6 +1882,9 @@ namespace System.Data
                         }
 
                     return sqliteDt;
+                case DataBaseType.POSTGRE:
+                    sql = "SELECT a.attname AS FIELDNAME,t.typname AS DATATYPE, (a.atttypmod-4) AS DATALENGTH from pg_class c,pg_attribute a,pg_type t where c.relname='{0}' and a.attnum>0 and a.attrelid=c.oid and a.atttypid=t.oid;";
+                    break;
                 default:
                     sql = ""; break;
             }
@@ -2482,7 +2542,7 @@ namespace System.Data
                 if (drs.Length > 0)
                 {
                     object val = prop.GetValue(obj, null);
-                    if (val is Enum) val = (int)val;
+                    if (val is Enum) val = (int)val;//int
                     if (val is bool) val = (bool)val ? 1 : 0;
 
                     IDataParameter param = dbType.CreateDBDataParameter(paramName, val);
@@ -2760,13 +2820,19 @@ namespace System.Data
             {
                 return string.Format("select {0} from {1}", _selectedFields, tableName);
             }
-            return string.Format(result, _selectedFields, tableName, whereClause);
+            result = string.Format(result, _selectedFields, tableName, whereClause);
+
+            return result;
         }
 
         public static string GetDeleteSQL(this DataBaseType dbType, string tableName, string whereClause)
         {
             string result = "delete from {0} where {1}";
-            return string.Format(result, tableName, whereClause);
+            if (dbType == DataBaseType.POSTGRE) result = result.ToLower();
+
+            result = string.Format(result, tableName, whereClause);
+
+            return result;
         }
 
         public static string GetUpdateSQL(this DataBaseType dbType, DataTable fields, string tableName, string whereClause)
@@ -2795,7 +2861,14 @@ namespace System.Data
                 fieldsStr += string.Format(format, name.ToUpper());
             }
 
-            result = string.Format(result, tableName, fieldsStr.TrimEnd(','), whereClause);
+            fieldsStr = fieldsStr.TrimEnd(',');
+            if (dbType == DataBaseType.POSTGRE)
+            {
+                result = result.ToLower();
+                fieldsStr = fieldsStr.ToLower();
+            }
+
+            result = string.Format(result, tableName, fieldsStr, whereClause);
 
             return result;
         }
@@ -2832,6 +2905,8 @@ namespace System.Data
 
             result = string.Format(result, tableName, fieldsStr.TrimEnd(','), fieldsPara.TrimEnd(','));
 
+            if (dbType == DataBaseType.POSTGRE) result = result.ToLower();
+
             return result;
         }
 
@@ -2849,6 +2924,7 @@ namespace System.Data
                 case DataBaseType.MSACCESS: return dateTime.ToSQLStringMSACCESS();
                 case DataBaseType.MSSQL: return dateTime.ToSQLStringMSSQL();
                 case DataBaseType.SQLITE: return dateTime.ToSQLStringSQLITE();
+                case DataBaseType.POSTGRE: return dateTime.ToSQLStringPostgres();
                 default: return string.Empty;
             }
         }
@@ -3770,7 +3846,9 @@ namespace System.Drawing
             if (image == null) throw new NullReferenceException();
 
             System.IO.MemoryStream ms = new System.IO.MemoryStream();
-            image.Save(ms, image.RawFormat);
+           
+            image.Save(ms,ImageFormat.Png );//image.RawFormat
+
             byte[] buffer = ms.ToArray();
             ms.Close();
 
